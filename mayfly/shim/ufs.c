@@ -140,6 +140,13 @@ static uint32_t scsi(uint8_t lun, const uint8_t *cdb, unsigned cdb_len, void *bu
 		return 2;
 	if (ucd.resp[0] != 0x21)		/* RESPONSE UPIU */
 		return 3;
+	if (*status_out) {
+		/* CHECK CONDITION: the sense data starts at byte 34 of the
+		 * response UPIU (2 bytes of sense length first). Print key/ASC/ASCQ
+		 * so we can tell UNIT ATTENTION (6/29) from a real error. */
+		con_hex2("  sense", "key=", ucd.resp[36], "asc=",
+		    ((uint32_t)ucd.resp[46] << 8) | ucd.resp[47]);
+	}
 	return *status_out ? 4 : 0;
 }
 

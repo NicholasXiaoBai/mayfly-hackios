@@ -107,3 +107,53 @@ standard timeslicing quantum is 10000 us
    控制器起来了但命令被拒。要先对齐 uid/utrl 描述符格式与 PHY gear。
 
 推荐先走 1，把内核推到用户态，再回头修 UFS。
+
+---
+
+## 2026-10-25 凌晨：UFS 与低窗实验
+
+### UFS 在 shim 里是通的
+
+shim 的独立探针（不经过内核）显示：
+
+```
+UFS TUR  rc=00000000  ocs/st=00000000
+UFS CAP  rc=00000000  ocs/st=00000000
+UFS READ rc=00000000  ocs/st=00000000
+```
+
+`ocs=0`（传输成功）、`st=0`（SCSI 成功）。早先看到的 `ocs/st=0x0002` 是两者打包打印
+（`ocs << 8 | st`），实际是 **ocs=0 + st=2 (CHECK CONDITION)**，并不是 OCS 错误码。
+**结论：控制器与颗粒通信正常，命令格式没问题。**
+
+### 低窗实验失败，但失败点很有价值
+
+把内核放到 4GB 以下（`MAYFLY_PHYS=0x80000000`、`MAYFLY_SIZE=0xBA00000`，186MB）以验证
+"DMA 高位地址导致内核 UFS 失败"的假设。内核能启动，但在 framebuffer 映射处 panic：
+
+```
+SWEET EARLY 17: fbcon config read; mapping
+SWEET EARLY PANIC: pmap_map_bd_with_options: no PTE for vaddr=0xfffffe000c000000,
+  start=0xb0000000, end=0xbab00000, prot=0x3 @pmap.c:1835
+```
+
+原因：framebuffer 在 `0xb8000000`，而低窗的物理映射只覆盖 `0x80000000..0x8BA00000`，
+`ml_io_map_wcomb()` 需要 physmap 里存在对应的 PTE。
+
+**所以低窗不是干净的隔离手段**——要测 UFS 的 DMA 假设，得让内核继续用高窗，
+改为让 UFS 驱动单独从低地址分配 DMA 缓冲。
+
+### 当前最可靠的状态
+
+| 配置 | 结果 |
+|---|---|
+| 高窗 0x840000000（9GB） | 内核跑到 `kdp_init` 之后停住，UFS 驱动报错 |
+| 低窗 0x80000000（186MB） | 内核跑到 `SWEET EARLY 17`，framebuffer 映射 panic |
+
+### 建议的下一步
+
+1. 回到高窗配置
+2. 给 `sweet_ufs.c` 加"低地址 DMA"：从 `0x80000000` 起的一段保留区分配 bounce buffer
+   （而不是用 IOKit 从高窗分配），再观察命令是否成功 —— 这是唯一能干净验证
+   4GB 假设的方法
+3. 或者：给内核加一个**颜色标记**（UFS 成功画绿条、失败画红条），让判读不依赖拍小字

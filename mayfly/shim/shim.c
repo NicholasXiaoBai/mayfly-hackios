@@ -557,20 +557,18 @@ void shim_main(uint64_t dtb)
 	}
 	con_skip();
 	const char *why = loader_boot(dtb);
-#ifndef K60_NOFB
-	/* 只回报 loader 的结论，停 2 分钟等拍照：后面的诊断套件会把这几行顶掉 */
-	con_clear(RED);
 	con_str("LOADER", why);
-	con_hex2("INITRD", "lo=", (uint32_t)g_rd_start, "hi=", (uint32_t)g_rd_end);
 	con_hex("MAGIC", g_magic);
 	con_skip();
-	con_str("HOLD", "2 min - photograph this");
-#endif
-	delay_ms(120000);
-	reset(5);
 
-	con_str("LOADER", why);
+	/* 只跑 UFS 探针并停住：屏幕只留这几行，方便拍照确认 sense data */
+	con_clear(RED);
+	con_str("UFS PROBE", "TUR / CAP / READ");
+	test_ufs();
 	con_skip();
+	con_str("HOLD", "3 min - UFS sense");
+	delay_ms(180000);
+	reset(5);
 
 	/* No payload: probe the internal UFS while the MMU is still off. */
 	stage = "ufs";

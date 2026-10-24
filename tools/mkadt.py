@@ -4,14 +4,15 @@
 Only what the early boot path actually reads (see NOTES.md); every MMIO
 address comes from the sweet live FDT. Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem]
 """
+import os
 import hashlib, os, struct, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import adt  # noqa: E402
 
 # Kernel-managed RAM: above every Qualcomm XPU carve-out (see NOTES.md)
-PHYS_BASE = 0x840000000        # 默认也走高窗：低窗几乎被保留区占满
-MEM_SIZE = 0x100000000         # 4 GB（保守值，真机用 --highmem）
+PHYS_BASE = int(os.environ.get('MAYFLY_PHYS', '0x840000000'), 0)  # 可用 MAYFLY_PHYS 覆盖（低窗试验）
+MEM_SIZE = int(os.environ.get('MAYFLY_SIZE', '0x100000000'), 0)   # 可用 MAYFLY_SIZE 覆盖
 # Panic log buffer, carved from the TOP of the dram range and exposed to XNU as
 # /pram + /chosen/embedded-panic-log-size. Without it, pe_init.c's
 # check_for_panic_log() leaves gPanicBase == 0, debug_log_init() bails out twice
