@@ -53,7 +53,13 @@ truncate -s "$END" out/Image
 echo "  Image = $END 字节"
 
 echo "  RD  ramdisk"
-python3 "$ROOT/tools/mkramdisk.py" out/ramdisk.bin
+if [ -n "${1:-}" ]; then
+	# 给了 payload（mkpayload.py 的产物）：它自己就是 ramdisk，里面是内核 + ADT
+	cp "$1" out/ramdisk.bin
+	echo "       ramdisk = $1 ($(wc -c < "$1") 字节)"
+else
+	python3 "$ROOT/tools/mkramdisk.py" out/ramdisk.bin
+fi
 
 echo "  IMG shim-boot.img (header v$HDRVER)"
 ARGS=(--header_version "$HDRVER" --kernel out/Image --ramdisk out/ramdisk.bin
