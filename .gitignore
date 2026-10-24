@@ -1,0 +1,10 @@
+# 构建产物
+mayfly/shim/out/
+out/
+*.o
+*.elf
+*.bin
+!mayfly/shim/out/.gitkeep
+
+# 本机工具链
+toolchain/

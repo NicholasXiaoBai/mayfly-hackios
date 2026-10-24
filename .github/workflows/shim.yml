@@ -1,0 +1,45 @@
+name: build-shim
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  shim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+
+      - name: Build shim + boot image
+        run: bash mayfly/shim/build-ci.sh
+
+      - name: Checksum
+        run: |
+          sha256sum mayfly/shim/out/shim-boot.img
+          ls -l mayfly/shim/out/
+
+      # 公开仓库的 release 附件可以匿名下载，省掉拿 token 的麻烦
+      - name: Publish to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ci-shim
+          name: mayfly shim (CI build)
+          body: |
+            自动构建的 Xiaomi 12S (mayfly / SM8475) 诊断镜像。
+            用 `fastboot boot shim-boot.img` 加载，不写任何分区。
+          files: mayfly/shim/out/shim-boot.img
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shim-boot
+          path: mayfly/shim/out/shim-boot.img
