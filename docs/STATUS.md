@@ -55,3 +55,55 @@ ESR   = 0x20000000（EC=0）
   所以 payload 改为追加在镜像尾部，`Image` 补齐到 `PAYLOAD_OFF=0x80000`，
   loader 用 `adr` 取基址定位
 - shim 的 `con_hex2` 只接受 32 位，打印 64 位值会被截断显示（会误导排查）
+
+---
+
+## 更新：内核已越过首个 panic（2026-10-24 23:35）
+
+补丁 **0082-mayfly-skip-arch-timers** 生效。`fiq_context_init()` 在 SWEET 下不再调用
+`_enable_virtual_timer()`（它会连写 `CNTV_CTL_EL0` 与 `CNTP_CTL_EL0`，后者在本平台 EL1 上是
+未定义指令）。
+
+内核随即跑完下面这一整段：
+
+```
+SWEET GIC: built-in interface registered
+SWEET NKE: AppleKeyStore registered (no passcode, unlocked)
+SWEET NVR: IOWatchdog registered (accepts check-ins, never fires)
+SWEET SURF: IOCoreSurfaceRoot registered
+SWEET HID: buttons registered / touch registered
+SWEET BATTERY: static fallback, 100% 4200mV external=1 charging=0
+SWEET FB: AppleCLCD 1080x2400 stride 4320 at 0xb8000000, presented as 1125x2436
+SWEET CPU: requested=1 selected=1 (limit=8)
+SWEET CPU: cpu0 mpidr=0x0 came alive; SGI1 OK
+KMC framework successfully initialized
+using 11747 buffer headers and 7921 cluster IO buffer headers
+SWEET CPU: 1/1 CPUs initialized, SGI1 verified
+zone_init / pmap bootstrap done
+standard timeslicing quantum is 10000 us
+... configuring debugging over serial
+```
+
+即：平台专家、四个 SWEET 驱动、framebuffer、单核启动、内核内存管理全部就绪。
+
+### 输出在这里停住
+
+最后一行是 `configuring debugging over serial`。此后没有新的 kprintf，设备持续在线下（不自恢复）。
+最可能是内核在等根设备（`rd=`），因为 payload 里没有根文件系统——`mkpayload --ramdisk` 没给。
+
+### cmdline 注意
+
+- `serial=3` 是**必须**的：改成 `serial=0` 后 fb 控制台不再输出，只剩 `SWEET EARLY 28` 一行黑屏
+- `debug=0x8`（仅 kprintf）比 `0xc` 干净：后者会多打一条 KDB 初始化
+
+## 下一个卡点：根文件系统
+
+两条路，都不依赖再猜：
+
+1. **ramfs 根卷**：ios-sweet 补丁 0021–0027 支持 RAM-disk root / mockfs，
+   `mkpayload.py --ramdisk IMAGE` 会把镜像作为 md0 挂上，cmdline 加 `rd=md0`。
+   好处是不碰 UFS 就能把内核推到 `launchd`。
+2. **修 UFS**：shim 实测 `TUR/CAP/READ` 全部返回 `OCS=2`（invalid UTP task attribute），
+   控制器起来了但命令被拒。要先对齐 uid/utrl 描述符格式与 PHY gear。
+
+推荐先走 1，把内核推到用户态，再回头修 UFS。
