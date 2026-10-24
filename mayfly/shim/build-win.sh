@@ -28,7 +28,8 @@ CMDLINE=${CMDLINE:-console=null}
 CC="$ZIG cc -target $TARGET"
 # -fno-jump-tables: 否则 clang 把 panic 的 switch 编成绝对地址跳转表，
 #   破坏"镜像内无绝对地址"这个前提。
-CFLAGS="-O2 -ffreestanding -nostdlib -fno-pic -fno-jump-tables -mgeneral-regs-only \
+PAYLOAD_OFF=${PAYLOAD_OFF:-0x80000}
+CFLAGS="-DPAYLOAD_OFF=${PAYLOAD_OFF} -DBUILD_STAMP=\"$(date +%m%d-%H%M)\" -O2 -ffreestanding -nostdlib -fno-pic -fno-jump-tables -mgeneral-regs-only \
 -mstrict-align -fno-stack-protector -Wall -Wextra"
 
 mkdir -p out
@@ -46,29 +47,45 @@ echo "  LD  shim.elf"
 $CC $CFLAGS -static -T shim.ld -Wl,--build-id=none -Wl,--no-gc-sections $LIST -o out/shim.elf
 
 echo "  CHK 绝对重定位"
-python "$ROOT/mayfly/tools/elfinfo.py" out/shim.elf || {
+python "$ROOT/tools/elfinfo.py" out/shim.elf || {
 	echo "error: 镜像里存在绝对重定位，ABL 不做重定位，运行必崩" >&2
 	exit 1
 }
 
 echo "  BIN shim.elf -> Image"
-END=$(python "$ROOT/mayfly/tools/elfinfo.py" out/shim.elf --end)
+END=$(python "$ROOT/tools/elfinfo.py" out/shim.elf --end)
 [ "$END" != "None" ] && [ -n "$END" ] || { echo "拿不到 _end" >&2; exit 1; }
 # 自己把 ELF 摊成裸二进制：zig 不带 objcopy，lld 也不收 --oformat
-python "$ROOT/mayfly/tools/elfinfo.py" out/shim.elf --bin out/Image || exit 1
+python "$ROOT/tools/elfinfo.py" out/shim.elf --bin out/Image || exit 1
 # ABL 只复制文件本身，.bss 和栈要按 _end 补成真实字节
 truncate -s "$END" out/Image
 echo "  Image = $END 字节"
 
-echo "  RD  ramdisk"
+echo "  RD  ramdisk（空 newc：payload 不再走 ramdisk）"
+python "$ROOT/tools/mkramdisk.py" out/ramdisk.bin
+
+# payload 追加在镜像尾部：ABL 不更新 /chosen 的 initrd 字段，所以不能靠它定位。
+# 镜像补齐到 PAYLOAD_OFF，loader 用 adr 取基址 + 这个常量找到 payload。
 if [ -n "${1:-}" ]; then
-	cp "$1" out/ramdisk.bin
-else
-	python "$ROOT/mayfly/tools/mkramdisk.py" out/ramdisk.bin
+	shim_end=$(wc -c < out/Image)
+	if [ "$shim_end" -gt "$((PAYLOAD_OFF))" ]; then
+		echo "error: shim 已 ${shim_end} 字节，超过 PAYLOAD_OFF=${PAYLOAD_OFF}" >&2
+		exit 1
+	fi
+	truncate -s "$((PAYLOAD_OFF))" out/Image
+	cat "$1" >> out/Image
+	python - <<'PYEOF'
+import struct
+f='out/Image'
+d=bytearray(open(f,'rb').read())
+struct.pack_into('<Q', d, 16, len(d))     # ARM64 Image header 的 image_size
+open(f,'wb').write(d)
+print(f'       Image = {len(d)} 字节（shim {len(d)-struct.unpack_from("<Q",d,16)[0]} ... 尾部含 payload）')
+PYEOF
 fi
 
 echo "  IMG shim-boot.img (header v$HDRVER)"
-python "$ROOT/mayfly/tools/mkbootimg.py" \
+python "$ROOT/tools/mkbootimg.py" \
 	--header_version "$HDRVER" \
 	--kernel out/Image --ramdisk out/ramdisk.bin --dtb "$DTB" \
 	--base 0 --kernel_offset 0x8000 --ramdisk_offset 0x1000000 \

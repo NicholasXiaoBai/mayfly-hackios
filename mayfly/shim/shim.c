@@ -12,6 +12,12 @@
 #include "loader.h"
 #include "ufs.h"
 
+#ifndef BUILD_STAMP
+#define BUILD_STAMP "unknown"
+#endif
+
+extern uint64_t g_rd_start, g_rd_end, g_magic;
+
 #define IMEM_RESTART_REASON	0x146aa65cUL	/* qcom,msm-imem restart_reason@65c */
 #define RESTART_BOOTLOADER	0x77665500U
 #define PSHOLD			0x0c264000UL
@@ -540,6 +546,7 @@ void shim_main(uint64_t dtb)
 	con_clear(RED);
 	con_banner("MAYFLY", "ios-sweet port bring-up / Xiaomi 12S (mayfly, SM8475)",
 	    WHITE, RED, 18);
+	con_str("BUILD", BUILD_STAMP);
 	con_str("SHIM", "display probe: if you can read this, the panel is on");
 #endif
 	/* 校准标记：两条贯穿全高的竖线。屏上若是斜的，倾斜量 = stride 误差的累积，
@@ -550,6 +557,18 @@ void shim_main(uint64_t dtb)
 	}
 	con_skip();
 	const char *why = loader_boot(dtb);
+#ifndef K60_NOFB
+	/* 只回报 loader 的结论，停 2 分钟等拍照：后面的诊断套件会把这几行顶掉 */
+	con_clear(RED);
+	con_str("LOADER", why);
+	con_hex2("INITRD", "lo=", (uint32_t)g_rd_start, "hi=", (uint32_t)g_rd_end);
+	con_hex("MAGIC", g_magic);
+	con_skip();
+	con_str("HOLD", "2 min - photograph this");
+#endif
+	delay_ms(120000);
+	reset(5);
+
 	con_str("LOADER", why);
 	con_skip();
 

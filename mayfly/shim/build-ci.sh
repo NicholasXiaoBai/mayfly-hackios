@@ -15,7 +15,8 @@ CMDLINE=${CMDLINE:-console=null}
 CC="${CROSS}gcc"
 OBJCOPY="${CROSS}objcopy"
 
-CFLAGS="-O2 -ffreestanding -nostdlib -fno-pic -fno-jump-tables -mgeneral-regs-only \
+PAYLOAD_OFF=${PAYLOAD_OFF:-0x80000}
+CFLAGS="-DPAYLOAD_OFF=${PAYLOAD_OFF} -O2 -ffreestanding -nostdlib -fno-pic -fno-jump-tables -mgeneral-regs-only \
 -mstrict-align -fno-stack-protector -Wall -Wextra"
 
 mkdir -p out
@@ -52,13 +53,27 @@ END=$(python3 "$ROOT/tools/elfinfo.py" out/shim.elf --end)
 truncate -s "$END" out/Image
 echo "  Image = $END 字节"
 
-echo "  RD  ramdisk"
+echo "  RD  ramdisk（空 newc：payload 不再走 ramdisk）"
+python3 "$ROOT/tools/mkramdisk.py" out/ramdisk.bin
+
+# payload 追加在镜像尾部：ABL 不更新 /chosen 的 initrd 字段，所以不能靠它定位。
+# 镜像补齐到 PAYLOAD_OFF，loader 用 adr 取基址 + 这个常量找到 payload。
 if [ -n "${1:-}" ]; then
-	# 给了 payload（mkpayload.py 的产物）：它自己就是 ramdisk，里面是内核 + ADT
-	cp "$1" out/ramdisk.bin
-	echo "       ramdisk = $1 ($(wc -c < "$1") 字节)"
-else
-	python3 "$ROOT/tools/mkramdisk.py" out/ramdisk.bin
+	shim_end=$(wc -c < out/Image)
+	if [ "$shim_end" -gt "$((PAYLOAD_OFF))" ]; then
+		echo "error: shim 已 ${shim_end} 字节，超过 PAYLOAD_OFF=${PAYLOAD_OFF}" >&2
+		exit 1
+	fi
+	truncate -s "$((PAYLOAD_OFF))" out/Image
+	cat "$1" >> out/Image
+	python3 - <<'PYEOF'
+import struct
+f='out/Image'
+d=bytearray(open(f,'rb').read())
+struct.pack_into('<Q', d, 16, len(d))     # ARM64 Image header 的 image_size
+open(f,'wb').write(d)
+print(f'       Image = {len(d)} 字节（shim {len(d)-struct.unpack_from("<Q",d,16)[0]} ... 尾部含 payload）')
+PYEOF
 fi
 
 echo "  IMG shim-boot.img (header v$HDRVER)"

@@ -12,6 +12,13 @@
 #include "fdt.h"
 #include "loader.h"
 
+/* 编译期用 -DPAYLOAD_OFF= 传入，等于把 Image 补齐到的偏移 */
+#ifndef PAYLOAD_OFF
+#define PAYLOAD_OFF 0x80000UL
+#endif
+
+extern char _head[];
+
 #define BOOT_LINE_LENGTH	608
 #define PAGE_16K		0x4000UL
 
@@ -76,19 +83,29 @@ static int magic_ok(const char *m)
 
 typedef void (*xnu_entry_t)(uint64_t boot_args_pa);
 
+uint64_t g_rd_start, g_rd_end, g_magic;   /* 给 shim.c 在屏上回报用 */
+
 const char *loader_boot(uintptr_t dtb)
 {
-	uint64_t rd_start, rd_end;
+	uint64_t rd_start = 0, rd_end = 0;
 
-	if (!fdt_chosen_u64(dtb, "linux,initrd-start", &rd_start) ||
-	    !fdt_chosen_u64(dtb, "linux,initrd-end", &rd_end))
-		return "no initrd in /chosen";
-	con_hex2("INITRD", "lo=", rd_start, "hi=", rd_end);
+	/* /chosen 的 initrd 字段在 mayfly 的 ABL 上不可信（实测报的是一个 6.8MB 的
+	 * 区间，而我们的 payload 有 16.6MB，MAGIC 也对不上）。所以 payload 改成
+	 * 追加在本镜像尾部、由链接期常量 PAYLOAD_OFF 定位：镜像基址用 adr 取，
+	 * 不依赖 ABL 传任何东西。 */
+	(void)fdt_chosen_u64(dtb, "linux,initrd-start", &rd_start);
+	(void)fdt_chosen_u64(dtb, "linux,initrd-end", &rd_end);
+	g_rd_start = rd_start; g_rd_end = rd_end;
 
-	const struct payload *p = (const struct payload *)rd_start;
+	uintptr_t img_base;
+	__asm__ volatile("adr %0, _head" : "=r"(img_base));
+	const struct payload *p = (const struct payload *)(img_base + PAYLOAD_OFF);
+	con_hex2("IMAGE+", "base=", (uint32_t)img_base, "off=", (uint32_t)PAYLOAD_OFF);
+
+	{ uint64_t m = 0; for (int i = 0; i < 8; i++) m |= (uint64_t)(unsigned char)p->magic[i] << (8 * i); g_magic = m; }
 	if (!magic_ok(p->magic))
-		return "no SWEETXNU payload";
-	if (p->version != 1 || (p->adt_off & 7) || (rd_start & 7))
+		return "no payload at IMAGE+off";
+	if (p->version != 1 || (p->adt_off & 7))
 		return "bad payload header";
 
 	uint64_t pa_of_va_base = p->phys_base - p->virt_base;	/* pa = va + this */
@@ -103,7 +120,7 @@ const char *loader_boot(uintptr_t dtb)
 	for (uint32_t i = 0; i < p->nsegs; i++) {
 		const struct payload_seg *s = &p->segs[i];
 		uintptr_t dst = s->vmaddr + pa_of_va_base;
-		copy64(dst, rd_start + s->file_off, s->file_size);
+		copy64(dst, (uintptr_t)p + s->file_off, s->file_size);
 		if (s->vmsize > s->file_size)
 			zero64(dst + ((s->file_size + 7) & ~7UL), s->vmsize - ((s->file_size + 7) & ~7UL));
 	}
@@ -111,7 +128,7 @@ const char *loader_boot(uintptr_t dtb)
 
 	/* ADT, then boot_args, behind the kernel; everything below topOfKernelData is ours. */
 	uintptr_t adt_pa = p->kernel_end + pa_of_va_base;
-	copy64(adt_pa, rd_start + p->adt_off, p->adt_size);
+	copy64(adt_pa, (uintptr_t)p + p->adt_off, p->adt_size);
 	uintptr_t ba_pa = (adt_pa + p->adt_size + PAGE_16K - 1) & ~(PAGE_16K - 1);
 	uintptr_t top = ba_pa + PAGE_16K;
 
@@ -138,7 +155,27 @@ const char *loader_boot(uintptr_t dtb)
 
 	uintptr_t entry_pa = p->entry_va + pa_of_va_base;
 	con_hex("JUMP", entry_pa);
-	con_str("XNU", "jumping (fbcon clears screen)");
+
+	/* 诊断：内核在 fiq_context_init+0xc 报 Undefined instruction，那条本该是
+	 * 0xd51be328 (MSR CNTV_CTL_EL0)。这里把内存里实际的字读回来比对，
+	 * 同时报当前异常级别——若 CEL 不是 0x4(EL1)，就能解释为什么这条 MSR 非法。 */
+	uint64_t cel;
+	__asm__ volatile("mrs %0, CurrentEL" : "=r"(cel));
+	con_hex("CEL", cel);
+	{
+		uint64_t va = 0xfffffe0007491340ULL;
+		uint32_t got = *(volatile uint32_t *)(uintptr_t)(va + pa_of_va_base);
+		con_hex2("KPROBE", "got=", got, "want=", 0xd51be328U);
+	}
+	con_str("HOLD", "25s before jump - photograph");
+	{
+		uint64_t t0, fr, t;
+		__asm__ volatile("mrs %0, cntpct_el0" : "=r"(t0));
+		__asm__ volatile("mrs %0, cntfrq_el0" : "=r"(fr));
+		uint64_t stop = t0 + fr * 25;
+		do { __asm__ volatile("mrs %0, cntpct_el0" : "=r"(t)); } while (t < stop);
+	}
+	con_str("XNU", "jumping now");
 
 	/* Everything was written with the MMU and caches off; drop any stale I-cache lines too. */
 	__asm__ volatile("dsb sy; ic iallu; dsb sy; isb" ::: "memory");

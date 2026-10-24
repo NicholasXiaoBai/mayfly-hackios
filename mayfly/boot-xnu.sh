@@ -22,7 +22,12 @@ python3 "$ROOT/tools/mkpayload.py" "$KERNEL" "$ROOT/out/mayfly.adt" "$ROOT/out/p
 	--cmdline "$CMDLINE"
 
 echo "== 3/3 构建 boot 镜像"
-bash "$ROOT/mayfly/shim/build-ci.sh" "$ROOT/out/payload.bin"
+# 有交叉 gcc 就用它（CI 环境）；否则退回 Zig（Windows 本地）
+if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
+	bash "$ROOT/mayfly/shim/build-ci.sh" "$ROOT/out/payload.bin"
+else
+	bash "$ROOT/mayfly/shim/build-win.sh" "$ROOT/out/payload.bin"
+fi
 
 echo ""
 echo "刷入："
