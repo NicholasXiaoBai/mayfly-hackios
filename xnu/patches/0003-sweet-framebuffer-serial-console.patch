@@ -21,7 +21,7 @@ index 997a4ab..db26bbe 100644
 +
 +extern unsigned char iso_font[256 * 16];
 +
-+#define FBCON_SCALE     2
++#define FBCON_SCALE     1	/* mayfly: 150 rows so the verbose boot log fits without wrap */
 +#define FBCON_FG        0xffffffffu
 +#define FBCON_BG        0xff000000u
 +
