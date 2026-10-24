@@ -1,0 +1,25 @@
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -2244,9 +2244,22 @@
+ void
+ fiq_context_init(boolean_t enable_fiq __unused)
+ {
++#if defined(SWEET)
++	/*
++	 * mayfly: EL2 traps the architected timers at EL1. The shim proved that
++	 * MSR CNTP_CTL_EL0 is UNDEFINED here, and _enable_virtual_timer() writes
++	 * CNTV_CTL_EL0 and then CNTP_CTL_EL0 back to back, so the kernel panics
++	 * on the very first one long before it can report anything useful.
++	 * On this platform the timer IRQ arrives as a GIC Group 1 interrupt
++	 * (see pexpert/arm/pe_fiq.c, SWEET_VTIMER_INTID) and is set up there,
++	 * so leave the architected timers untouched.
++	 */
++	(void)enable_fiq;
++#else
+ 	/* Interrupts still disabled. */
+ 	assert(ml_get_interrupts_enabled() == FALSE);
+ 	_enable_virtual_timer();
++#endif
+ }
+ 
+ void

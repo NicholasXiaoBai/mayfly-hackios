@@ -175,6 +175,19 @@ const char *loader_boot(uintptr_t dtb)
 		uint64_t stop = t0 + fr * 25;
 		do { __asm__ volatile("mrs %0, cntpct_el0" : "=r"(t)); } while (t < stop);
 	}
+	/* 跳转前把 shim 自己开的中断全部关干净。
+	 * 实测：内核第一次 MSR CNTV_CTL_EL0 就报 Undefined instruction，而同一个 EL1 下
+	 * shim 写同一寄存器完全正常 —— 差别是 shim 写的时候中断是屏蔽的。所以更可能是
+	 * shim 留下的 pending vtimer(INTID 27) 在内核还没装好处理程序时立刻触发，
+	 * 异常被算到了那条 MSR 上。这里把定时器和 GIC 里的 PPI 都关掉。 */
+	__asm__ volatile("msr cntv_ctl_el0, xzr" ::: "memory");
+	{
+		volatile uint32_t *gicr_sgi = (volatile uint32_t *)(0x17180000UL + 0x10000);
+		gicr_sgi[0x180 / 4] = (1u << 27);	/* ICENABLER0: 关 INTID 27 */
+		gicr_sgi[0x280 / 4] = (1u << 27);	/* ICPENDR0: 清 pending */
+	}
+	__asm__ volatile("dsb sy; isb" ::: "memory");
+
 	con_str("XNU", "jumping now");
 
 	/* Everything was written with the MMU and caches off; drop any stale I-cache lines too. */
