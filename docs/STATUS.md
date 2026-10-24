@@ -157,3 +157,42 @@ SWEET EARLY PANIC: pmap_map_bd_with_options: no PTE for vaddr=0xfffffe000c000000
    （而不是用 IOKit 从高窗分配），再观察命令是否成功 —— 这是唯一能干净验证
    4GB 假设的方法
 3. 或者：给内核加一个**颜色标记**（UFS 成功画绿条、失败画红条），让判读不依赖拍小字
+
+### 2026-10-25 01:40 的干净日志推翻了 UFS 的结论
+
+高窗配置下拍到完整可读日志，内核跑到：
+
+```
+SWEET CPU: 1/1 CPUs initialized, SGI1 verified
+```
+
+这是屏幕上最后一行。**整段日志里没有任何 `SWEET UFS:` 输出**——既没有成功行，也没有失败行。
+之前那张 01:25 的照片上"看到"的 UFS 报错是误读。
+
+同时注意这两行：
+
+```
+using 11747 buffer headers and 7921 cluster IO buffer headers     <- 来自 bsd_init
+```
+
+说明内核**已经进入 `bsd_init`**，正卡在"等根设备"，而不是更早的地方。
+
+而 `sweet_ufs` 驱动的入口是：
+
+```c
+if (SecureDTLookupEntry(NULL, "/sweet-ufs", &node) != kSuccess || ...)
+        printf("SWEET UFS: no /sweet-ufs node in the device tree\n");
+```
+
+ADT 里 `/sweet-ufs` 确实在根目录下（已核对），compatible 是 `qcom,ufshc`，reg 是
+`0x01d84000`。既然连"找不到节点"这句都没打，说明**驱动的 start() 根本没被调用**。
+
+### 修正后的下一步（只差一行打印）
+
+在 `sweet_ufs.c` 的 `start()` 最开头加一句 `printf("SWEET UFS: start\n")`：
+
+- 有这行 → 驱动起来了，问题在它内部的某处提前 return
+- 没这行 → 驱动没被匹配，要查 `IOProviderMatch`/`probe` 的注册与启动时机
+
+这比继续在 shim 里做实验有效得多——shim 直接操作寄存器，绕过整个驱动模型，
+它"通"并不能说明内核驱动也能起来。
