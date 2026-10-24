@@ -2,7 +2,7 @@ diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
 index 997a4ab..db26bbe 100644
 --- a/pexpert/arm/pe_serial.c
 +++ b/pexpert/arm/pe_serial.c
-@@ -697,6 +697,148 @@ register_serial_functions(struct pe_serial_functions *fns)
+@@ -697,6 +697,161 @@ register_serial_functions(struct pe_serial_functions *fns)
  	gPESF = fns;
  }
  
@@ -21,7 +21,7 @@ index 997a4ab..db26bbe 100644
 +
 +extern unsigned char iso_font[256 * 16];
 +
-+#define FBCON_SCALE     1	/* mayfly: 150 rows so the verbose boot log fits without wrap */
++#define FBCON_SCALE     2
 +#define FBCON_FG        0xffffffffu
 +#define FBCON_BG        0xff000000u
 +
@@ -44,9 +44,22 @@ index 997a4ab..db26bbe 100644
 +fbcon_newline(void)
 +{
 +	fbcon_col = 0;
-+	fbcon_row = (fbcon_row + 1) % fbcon_rows;
-+	fbcon_clear_row(fbcon_row);
-+	fbcon_clear_row((fbcon_row + 1) % fbcon_rows);
++	if (fbcon_row + 1 >= fbcon_rows) {
++		/* mayfly: scroll instead of wrapping. Wrapping overwrites the
++		 * oldest lines but also loses the newest ones behind the
++		 * controller's partial row clear, which makes bring-up logs
++		 * unreadable. */
++		uint32_t rp = 16 * FBCON_SCALE, wpl = fbcon_stride / 4;
++		uint32_t total = fbcon_rows * rp;
++		for (uint32_t y = 0; y + rp < total; y++) {
++			for (uint32_t x = 0; x < fbcon_width; x++)
++				fbcon_base[y * wpl + x] = fbcon_base[(y + rp) * wpl + x];
++		}
++		fbcon_clear_row(fbcon_rows - 1);
++	} else {
++		fbcon_row++;
++		fbcon_clear_row(fbcon_row);
++	}
 +}
 +
 +static void
@@ -151,7 +164,7 @@ index 997a4ab..db26bbe 100644
  #if HIBERNATION
  /**
   * Transitions the serial driver into a mode that can be run in the hibernation
-@@ -777,6 +919,8 @@ serial_init(void)
+@@ -777,6 +932,8 @@ serial_init(void)
  
  	PE_parse_boot_argn("disable-uart-irq", &disable_uart_irq, sizeof(disable_uart_irq));
  
@@ -164,7 +177,7 @@ diff --git a/pexpert/pexpert/arm/protos.h b/pexpert/pexpert/arm/protos.h
 index 404b50b..de0d744 100644
 --- a/pexpert/pexpert/arm/protos.h
 +++ b/pexpert/pexpert/arm/protos.h
-@@ -47,7 +47,8 @@ typedef enum serial_device {
+@@ -47,7 +60,8 @@ typedef enum serial_device {
  	SERIAL_DOCKCHANNEL=0x2,
  	SERIAL_PI3_UART=0x4,
  	SERIAL_VMAPPLE_UART=0x8,
