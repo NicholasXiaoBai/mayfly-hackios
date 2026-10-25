@@ -12,11 +12,12 @@ diff --git a/bsd/conf/files b/bsd/conf/files
 diff --git a/iokit/bsddev/IOKitBSDInit.cpp b/iokit/bsddev/IOKitBSDInit.cpp
 --- a/iokit/bsddev/IOKitBSDInit.cpp
 +++ b/iokit/bsddev/IOKitBSDInit.cpp
-@@ -766,6 +766,24 @@
+@@ -766,6 +766,25 @@
  		}
  	}
  
 +#if defined(ARM64_BOARD_CONFIG_SWEET)
++	printf("SWEET: IOFindBSDRoot watching rd=%s\n", rdBootVar);
 +//
 +//	SWEET: root on a GPT partition of the internal UFS (bsd/dev/sweet_ufs.c)
 +//
